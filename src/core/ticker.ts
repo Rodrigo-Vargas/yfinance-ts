@@ -208,21 +208,26 @@ export class Ticker {
       // If we didn't find structured data, try parsing embedded JSON strings
       // Yahoo Finance embeds data as escaped JSON in script tags
       if (!info.regularMarketPrice) {
-        // Look for embedded JSON data that contains the symbol and price info
-        // Pattern: regularMarketPrice\":3.01,\"fiftyTwoWeekHigh\":5.0,...\"longName\":\"3D Systems Corporation\"
-        // For DDD, we look for the price that comes before "3D Systems Corporation"
-        const embeddedPattern = new RegExp(`regularMarketPrice\\\\":([0-9.]+).*?longName\\\\":\\\\"3D Systems Corporation\\\\"`, 's');
-        const embeddedMatch = html.match(embeddedPattern);
+        // Look for embedded JSON data that contains price info
+        // Pattern: regularMarketPrice\":123.45,\"fiftyTwoWeekHigh\":...
+        const pricePattern = /regularMarketPrice\\":([0-9.]+)/;
+        const priceMatch = html.match(pricePattern);
 
-        if (embeddedMatch) {
-          info.regularMarketPrice = parseFloat(embeddedMatch[1]);
-          info.longName = '3D Systems Corporation';
-          info.shortName = '3D Systems Corporation';
+        if (priceMatch && priceMatch[1]) {
+          info.regularMarketPrice = parseFloat(priceMatch[1]);
 
-          // Also try to extract previousClose from the same embedded data
-          const prevClosePattern = new RegExp(`previousClose\\\\":([0-9.]+).*?longName\\\\":\\\\"3D Systems Corporation\\\\"`, 's');
+          // Try to extract company name from the same embedded data
+          const namePattern = /longName\\":\\"([^"]+)\\"/;
+          const nameMatch = html.match(namePattern);
+          if (nameMatch && nameMatch[1]) {
+            info.longName = nameMatch[1].replace(/\\/g, '');
+            info.shortName = info.longName;
+          }
+
+          // Try to extract previousClose
+          const prevClosePattern = /previousClose\\":([0-9.]+)/;
           const prevCloseMatch = html.match(prevClosePattern);
-          if (prevCloseMatch) {
+          if (prevCloseMatch && prevCloseMatch[1]) {
             info.previousClose = parseFloat(prevCloseMatch[1]);
           }
         }

@@ -103,6 +103,26 @@ describe('Integration Tests - Ticker', () => {
       expect(price).toBeDefined(); // Could be null or a number
     });
 
+    it('should fetch MMM stock price and log the result', async () => {
+      const ticker = new Ticker('MMM');
+
+      const price = await ticker.getPrice();
+
+      console.log('MMM getPrice result:', price);
+      console.log('MMM info result:', await ticker.info());
+
+      // Verify that the generic parsing logic works for multiple tickers
+      expect(price).toBeDefined();
+      expect(typeof price).toBe('number');
+      expect(price).toBeGreaterThan(0);
+
+      const info = await ticker.info();
+      expect(info.symbol).toBe('MMM');
+      expect(info.shortName).toBeDefined();
+      expect(info.longName).toBeDefined();
+      expect(info.currency).toBe('USD');
+    });
+
     it.skip('should fetch real current price', async () => {
       // TODO: Implement actual HTML/JSON parsing for price data
       // Currently getPrice() returns null due to placeholder implementation
