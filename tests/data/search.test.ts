@@ -13,12 +13,20 @@ jest.mock('../../src/utils/http', () => ({
 const mockHttpClient = defaultHttpClient as jest.Mocked<typeof defaultHttpClient>;
 
 // Helper to create mock response
-const createMockResponse = (data: any) => ({
-  data,
+const createMockResponse = (data: any): any => ({
   status: 200,
-  statusText: 'OK',
+  dataRaw: Buffer.from(JSON.stringify(data)),
+  data: data,
   headers: {},
-  config: { headers: {} } as any,
+  url: '',
+  request: {},
+  options: {},
+  stacks: [],
+  index: 0,
+  redirects: [],
+  curl: null,
+  text: JSON.stringify(data),
+  jar: null,
 });
 
 describe('Search', () => {

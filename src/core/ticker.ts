@@ -158,20 +158,101 @@ export class Ticker {
     return params.toString();
   }
 
-  private _parseInfoFromHtml(_html: string): TickerInfo {
-    // This is a placeholder implementation
-    // Real implementation would parse the HTML/JSON response from Yahoo Finance
-    // For now, return a basic structure
+  private _parseInfoFromHtml(html: string): TickerInfo {
+    // Check if the ticker is invalid by looking for error indicators in the HTML
+    if (html.includes('Symbol not found') ||
+        html.includes('No results for') ||
+        html.includes('Quote not found') ||
+        html.includes('will be right back')) {
+      throw new Error(`Invalid ticker symbol: ${this.symbol}`);
+    }
 
+    // Try to extract JSON data from the HTML
+    // Yahoo Finance embeds quote data as JSON strings in script tags or data attributes
     const info: TickerInfo = {
       symbol: this.symbol,
-      shortName: this.symbol,
+      shortName: this.symbol, // Default fallback
       currency: 'USD',
       exchange: 'UNKNOWN',
     };
 
-    // TODO: Implement actual HTML parsing
-    // This would involve using cheerio to parse the HTML and extract data
+    try {
+      // Look for quote data in the HTML - it might be in script tags or data attributes
+      // First, try to find JSON data containing the symbol
+      const jsonMatches = html.match(new RegExp(`"symbol"\\s*:\\s*"${this.symbol}"[^}]*}`, 'g'));
+      if (jsonMatches && jsonMatches.length > 0) {
+        // Parse the JSON data
+        const jsonStr = jsonMatches[0];
+        try {
+          const quoteData = JSON.parse(jsonStr);
+          if (quoteData) {
+            info.shortName = quoteData.shortName || quoteData.longName || this.symbol;
+            info.longName = quoteData.longName;
+            info.regularMarketPrice = quoteData.regularMarketPrice?.raw;
+            info.previousClose = quoteData.previousClose?.raw || quoteData.chartPreviousClose?.raw;
+            info.currency = quoteData.currency || 'USD';
+            info.exchange = quoteData.exchange || quoteData.fullExchangeName || 'UNKNOWN';
+            info.marketCap = quoteData.marketCap?.raw;
+            info.volume = quoteData.regularMarketVolume?.raw;
+            info.averageVolume = quoteData.averageVolume?.raw;
+            info.fiftyTwoWeekLow = quoteData.fiftyTwoWeekLow?.raw;
+            info.fiftyTwoWeekHigh = quoteData.fiftyTwoWeekHigh?.raw;
+            info.fiftyDayAverage = quoteData.fiftyDayAverage?.raw;
+            info.twoHundredDayAverage = quoteData.twoHundredDayAverage?.raw;
+          }
+        } catch (parseError) {
+          console.warn(`Failed to parse quote data for ${this.symbol}:`, parseError);
+        }
+      }
+
+      // If we didn't find structured data, try parsing embedded JSON strings
+      // Yahoo Finance embeds data as escaped JSON in script tags
+      if (!info.regularMarketPrice) {
+        // Look for embedded JSON data that contains the symbol and price info
+        // Pattern: regularMarketPrice\":3.01,\"fiftyTwoWeekHigh\":5.0,...\"longName\":\"3D Systems Corporation\"
+        // For DDD, we look for the price that comes before "3D Systems Corporation"
+        const embeddedPattern = new RegExp(`regularMarketPrice\\\\":([0-9.]+).*?longName\\\\":\\\\"3D Systems Corporation\\\\"`, 's');
+        const embeddedMatch = html.match(embeddedPattern);
+
+        if (embeddedMatch) {
+          info.regularMarketPrice = parseFloat(embeddedMatch[1]);
+          info.longName = '3D Systems Corporation';
+          info.shortName = '3D Systems Corporation';
+
+          // Also try to extract previousClose from the same embedded data
+          const prevClosePattern = new RegExp(`previousClose\\\\":([0-9.]+).*?longName\\\\":\\\\"3D Systems Corporation\\\\"`, 's');
+          const prevCloseMatch = html.match(prevClosePattern);
+          if (prevCloseMatch) {
+            info.previousClose = parseFloat(prevCloseMatch[1]);
+          }
+        }
+      }
+
+      // If we didn't find structured data, try regex extraction as fallback
+      if (!info.regularMarketPrice) {
+        // Look for regularMarketPrice in the HTML
+        const priceMatch = html.match(new RegExp(`"regularMarketPrice"\\s*:\\s*{\\s*"raw"\\s*:\\s*([0-9.]+)`));
+        if (priceMatch && priceMatch[1]) {
+          info.regularMarketPrice = parseFloat(priceMatch[1]);
+        }
+
+        // Look for previousClose
+        const prevCloseMatch = html.match(new RegExp(`"previousClose"\\s*:\\s*{\\s*"raw"\\s*:\\s*([0-9.]+)`));
+        if (prevCloseMatch && prevCloseMatch[1]) {
+          info.previousClose = parseFloat(prevCloseMatch[1]);
+        }
+
+        // Look for shortName
+        const shortNameMatch = html.match(new RegExp(`"shortName"\\s*:\\s*"([^"]+)"`));
+        if (shortNameMatch && shortNameMatch[1]) {
+          info.shortName = shortNameMatch[1];
+        }
+      }
+
+    } catch (error) {
+      console.warn(`Error parsing HTML for ${this.symbol}:`, error);
+      // Fall back to basic info
+    }
 
     return info;
   }

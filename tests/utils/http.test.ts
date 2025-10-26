@@ -1,47 +1,45 @@
 /// <reference types="jest" />
 
-import axios from 'axios';
+import { CurlClient } from 'curl-cffi';
 
-// Mock axios before importing HttpClient
-jest.mock('axios');
-const mockedAxios = axios as jest.Mocked<typeof axios>;
-
-// Setup default mock for axios.create
-const mockAxiosInstance = {
-  get: jest.fn(),
-  post: jest.fn(),
-  put: jest.fn(),
-  delete: jest.fn(),
-  interceptors: {
-    request: { use: jest.fn() },
-    response: { use: jest.fn() },
-  },
-};
-
-mockedAxios.create.mockReturnValue(mockAxiosInstance as any);
+// Mock curl-cffi before importing HttpClient
+jest.mock('curl-cffi');
+const mockedCurlClient = CurlClient as jest.MockedClass<typeof CurlClient>;
 
 import { HttpClient, defaultHttpClient } from '../../src/utils/http';
 
 describe('HttpClient', () => {
   let client: HttpClient;
-  let mockResponse: any;
+  let mockCurlInstance: jest.Mocked<CurlClient>;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockCurlInstance = {
+      request: jest.fn(),
+      onRequest: jest.fn(),
+    } as any;
+
+    mockedCurlClient.mockImplementation(() => mockCurlInstance);
     client = new HttpClient();
-    mockResponse = {
-      data: 'test data',
-      status: 200,
-      statusText: 'OK',
-      headers: {},
-      config: {},
-    };
   });
 
   describe('constructor', () => {
     it('should create client with default config', () => {
       const client = new HttpClient();
       expect(client).toBeDefined();
+      expect(mockedCurlClient).toHaveBeenCalledWith({
+        timeout: 30000,
+        impersonate: 'chrome124',
+        headers: {
+          'User-Agent': 'yfinance-ts/0.1.0',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+          'Accept-Encoding': 'gzip, deflate',
+          'DNT': '1',
+          'Connection': 'keep-alive',
+          'Upgrade-Insecure-Requests': '1',
+        },
+      });
     });
 
     it('should create client with custom config', () => {
@@ -52,6 +50,7 @@ describe('HttpClient', () => {
         retryDelay: 2000,
         rateLimitDelay: 200,
         userAgent: 'custom-agent/1.0',
+        impersonate: 'chrome120',
       };
       const client = new HttpClient(config);
       expect(client).toBeDefined();
@@ -59,73 +58,100 @@ describe('HttpClient', () => {
   });
 
   describe('HTTP methods', () => {
+    const mockCurlResponse = {
+      status: 200,
+      dataRaw: Buffer.from('test data'),
+      data: 'test data',
+      headers: {},
+      url: '',
+      request: {},
+      options: {},
+      stacks: [],
+      index: 0,
+      redirects: [],
+      curl: null,
+      text: 'test data',
+      jar: null,
+    };
+
     beforeEach(() => {
-      mockedAxios.create.mockReturnValue({
-        get: jest.fn().mockResolvedValue(mockResponse),
-        post: jest.fn().mockResolvedValue(mockResponse),
-        put: jest.fn().mockResolvedValue(mockResponse),
-        delete: jest.fn().mockResolvedValue(mockResponse),
-        interceptors: {
-          request: { use: jest.fn() },
-          response: { use: jest.fn() },
-        },
-      } as any);
+      mockCurlInstance.request.mockResolvedValue(mockCurlResponse as any);
     });
 
     it('should make GET request', async () => {
-      const client = new HttpClient();
       const result = await client.get('/test');
-      expect(result).toEqual(mockResponse);
+      expect(result).toEqual(mockCurlResponse);
+      expect(mockCurlInstance.request).toHaveBeenCalledWith({
+        method: 'GET',
+        url: 'https://finance.yahoo.com/test',
+      });
     });
 
     it('should make POST request', async () => {
-      const client = new HttpClient();
       const result = await client.post('/test', { data: 'test' });
-      expect(result).toEqual(mockResponse);
+      expect(result).toEqual(mockCurlResponse);
+      expect(mockCurlInstance.request).toHaveBeenCalledWith({
+        method: 'POST',
+        url: 'https://finance.yahoo.com/test',
+        data: { data: 'test' },
+      });
     });
 
     it('should make PUT request', async () => {
-      const client = new HttpClient();
       const result = await client.put('/test', { data: 'test' });
-      expect(result).toEqual(mockResponse);
+      expect(result).toEqual(mockCurlResponse);
+      expect(mockCurlInstance.request).toHaveBeenCalledWith({
+        method: 'PUT',
+        url: 'https://finance.yahoo.com/test',
+        data: { data: 'test' },
+      });
     });
 
     it('should make DELETE request', async () => {
-      const client = new HttpClient();
       const result = await client.delete('/test');
-      expect(result).toEqual(mockResponse);
+      expect(result).toEqual(mockCurlResponse);
+      expect(mockCurlInstance.request).toHaveBeenCalledWith({
+        method: 'DELETE',
+        url: 'https://finance.yahoo.com/test',
+      });
     });
   });
 
   describe('utility methods', () => {
+    const mockCurlResponse = {
+      status: 200,
+      dataRaw: Buffer.from('test data'),
+      data: 'test data',
+      headers: {},
+      url: '',
+      request: {},
+      options: {},
+      stacks: [],
+      index: 0,
+      redirects: [],
+      curl: null,
+      text: 'test data',
+      jar: null,
+    };
+
     beforeEach(() => {
-      mockedAxios.create.mockReturnValue({
-        get: jest.fn().mockResolvedValue(mockResponse),
-        interceptors: {
-          request: { use: jest.fn() },
-          response: { use: jest.fn() },
-        },
-      } as any);
+      mockCurlInstance.request.mockResolvedValue(mockCurlResponse as any);
     });
 
     it('should get text content', async () => {
-      const client = new HttpClient();
       const result = await client.getText('/test');
       expect(result).toBe('test data');
     });
 
     it('should get JSON content', async () => {
       const jsonData = { key: 'value' };
-      mockResponse.data = jsonData;
-      mockedAxios.create.mockReturnValue({
-        get: jest.fn().mockResolvedValue(mockResponse),
-        interceptors: {
-          request: { use: jest.fn() },
-          response: { use: jest.fn() },
-        },
-      } as any);
+      const jsonResponse = {
+        ...mockCurlResponse,
+        dataRaw: Buffer.from(JSON.stringify(jsonData)),
+        text: JSON.stringify(jsonData),
+      };
+      mockCurlInstance.request.mockResolvedValue(jsonResponse as any);
 
-      const client = new HttpClient();
       const result = await client.getJson('/test');
       expect(result).toEqual(jsonData);
     });
@@ -135,36 +161,36 @@ describe('HttpClient', () => {
     it('should not retry on 4xx client errors (except 429)', async () => {
       const clientError = {
         response: { status: 404 },
-        config: { _retry: 0 },
       };
 
-      // Create a fresh mock instance for this test
-      const noRetryMockInstance = {
-        get: jest.fn().mockRejectedValue(clientError),
-        interceptors: {
-          request: { use: jest.fn() },
-          response: { use: jest.fn() },
-        },
-      };
-      mockedAxios.create.mockReturnValueOnce(noRetryMockInstance as any);
+      mockCurlInstance.request.mockRejectedValue(clientError);
 
       const client = new HttpClient({ retries: 3 });
       await expect(client.get('/test')).rejects.toEqual(clientError);
-      expect(noRetryMockInstance.get).toHaveBeenCalledTimes(1);
+      expect(mockCurlInstance.request).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('rate limiting', () => {
     it('should add delay between requests', async () => {
       jest.useFakeTimers();
-      const mockAxiosInstance = {
-        get: jest.fn().mockResolvedValue(mockResponse),
-        interceptors: {
-          request: { use: jest.fn() },
-          response: { use: jest.fn() },
-        },
+      const mockCurlResponse = {
+        status: 200,
+        dataRaw: Buffer.from('test data'),
+        data: 'test data',
+        headers: {},
+        url: '',
+        request: {},
+        options: {},
+        stacks: [],
+        index: 0,
+        redirects: [],
+        curl: null,
+        text: 'test data',
+        jar: null,
       };
-      mockedAxios.create.mockReturnValue(mockAxiosInstance as any);
+
+      mockCurlInstance.request.mockResolvedValue(mockCurlResponse as any);
 
       const client = new HttpClient({ rateLimitDelay: 100 });
       const promise = client.get('/test');
@@ -173,7 +199,7 @@ describe('HttpClient', () => {
       jest.advanceTimersByTime(100);
       await promise;
 
-      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
+      expect(mockCurlInstance.request).toHaveBeenCalledTimes(1);
       jest.useRealTimers();
     });
   });
