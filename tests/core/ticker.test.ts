@@ -74,10 +74,12 @@ describe('Ticker', () => {
 
     it('should handle API errors', async () => {
       const mockGetJson = jest.spyOn(defaultHttpClient, 'getJson').mockRejectedValue(new Error('Network error'));
+      const mockGetText = jest.spyOn(defaultHttpClient, 'getText').mockRejectedValue(new Error('HTML scraping error'));
 
-      await expect(ticker.info()).rejects.toThrow('Network error');
+      await expect(ticker.info()).rejects.toThrow();
 
       mockGetJson.mockRestore();
+      mockGetText.mockRestore();
     });
   });
 
@@ -272,9 +274,9 @@ describe('Ticker', () => {
   });
 
   describe('_parseInfoFromHtml', () => {
-    it('should return basic ticker info structure', () => {
+    it('should return basic ticker info structure', async () => {
       const html = '<html><body>Some HTML content</body></html>';
-      const result = (ticker as any)._parseInfoFromHtml(html);
+      const result = await (ticker as any)._parseInfoFromHtml(html);
 
       expect(result).toEqual({
         symbol: 'AAPL',

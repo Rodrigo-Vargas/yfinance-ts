@@ -11,6 +11,7 @@ This is an early-stage port currently implementing:
 - ✅ Core type definitions
 - ✅ Error handling and logging
 - ✅ Basic Ticker class with info, history, price, and validation methods
+- ✅ **Automatic ticker correction** - handles dotted tickers (e.g., AAM.U → AAMU)
 - ✅ Download function for bulk historical data retrieval
 - ✅ Market class for market information and status
 - ✅ WebSocket classes for real-time price data streaming
@@ -46,6 +47,13 @@ import { Ticker, download, Market, YahooWebSocket, AsyncYahooWebSocket, Search }
 
 // Single ticker usage
 const ticker = new Ticker('AAPL');
+
+// Automatic ticker correction - handles dotted tickers
+// If AAM.U doesn't exist, it will automatically try AAMU
+const correctedTicker = new Ticker('AAM.U'); // Will fetch AAMU data if AAM.U fails
+const info = await correctedTicker.info(); // Returns data with symbol: 'AAM.U'
+console.log(info.symbol); // 'AAM.U' (original requested symbol)
+console.log(info.shortName); // Data from AAMU
 
 // Get basic information
 const info = await ticker.info();
@@ -136,6 +144,7 @@ console.log('Suggestions:', suggestions);
 ### Ticker
 
 - `new Ticker(symbol)` - Create a ticker instance
+  - **Automatic ticker correction**: If a dotted ticker (e.g., AAM.U) doesn't exist, automatically tries the ticker without dots (AAMU)
 - `ticker.info()` - Get basic information about the ticker
 - `ticker.history(options)` - Get historical market data
 - `ticker.getPrice()` - Get current price
