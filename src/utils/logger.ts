@@ -40,7 +40,7 @@ export class Logger {
 }
 
 // Default logger instance
-export const logger = new Logger();
+export const logger = new Logger(LogLevel.DEBUG);
 
 // Error handling utilities
 export function handleApiError(error: any): never {

@@ -18,37 +18,66 @@ describe('Ticker', () => {
 
   describe('info', () => {
     it('should fetch and cache ticker info', async () => {
-      const mockHtml = '<html><body>Mock AAPL data</body></html>';
-      const mockGetText = jest.spyOn(defaultHttpClient, 'getText').mockResolvedValue(mockHtml);
-      const mockParseInfo = jest.spyOn(ticker as any, '_parseInfoFromHtml').mockReturnValue({
-        symbol: 'AAPL',
-        shortName: 'Apple Inc.',
-        currency: 'USD',
-        exchange: 'NASDAQ',
-      });
+      const mockApiResponse = {
+        quoteSummary: {
+          result: [{
+            financialData: {
+              currentPrice: { raw: 150.25, fmt: '150.25' },
+              targetHighPrice: { raw: 200, fmt: '200.00' },
+            },
+            quoteType: {
+              symbol: 'AAPL',
+              shortName: 'Apple Inc.',
+              longName: 'Apple Inc.',
+              exchangeName: 'NASDAQ',
+              currency: 'USD',
+            },
+            defaultKeyStatistics: {
+              marketCap: { raw: 2500000000000, fmt: '2.5T' },
+              volume: { raw: 50000000, fmt: '50M' },
+            },
+            assetProfile: {
+              industry: 'Technology',
+            },
+            summaryDetail: {
+              regularMarketPrice: { raw: 150.25, fmt: '150.25' },
+              previousClose: { raw: 149.50, fmt: '149.50' },
+              fiftyTwoWeekLow: { raw: 124.17, fmt: '124.17' },
+              fiftyTwoWeekHigh: { raw: 198.23, fmt: '198.23' },
+            },
+          }],
+        },
+      };
+
+      const mockGetJson = jest.spyOn(defaultHttpClient, 'getJson').mockResolvedValue(mockApiResponse);
 
       const result = await ticker.info();
 
-      expect(mockGetText).toHaveBeenCalledWith('/quote/AAPL');
-      expect(mockParseInfo).toHaveBeenCalledWith(mockHtml);
+      expect(mockGetJson).toHaveBeenCalledWith('https://query1.finance.yahoo.com/v7/finance/quoteSummary/AAPL', {
+        params: {
+          modules: 'financialData,quoteType,defaultKeyStatistics,assetProfile,summaryDetail',
+          corsDomain: 'finance.yahoo.com',
+          formatted: 'false',
+        },
+      });
       expect(result.symbol).toBe('AAPL');
       expect(result.shortName).toBe('Apple Inc.');
+      expect(result.regularMarketPrice).toBe(150.25);
 
       // Second call should use cache
       const result2 = await ticker.info();
-      expect(mockGetText).toHaveBeenCalledTimes(1); // Should not call again
+      expect(mockGetJson).toHaveBeenCalledTimes(1); // Should not call again
       expect(result2).toBe(result);
 
-      mockGetText.mockRestore();
-      mockParseInfo.mockRestore();
+      mockGetJson.mockRestore();
     });
 
     it('should handle API errors', async () => {
-      const mockGetText = jest.spyOn(defaultHttpClient, 'getText').mockRejectedValue(new Error('Network error'));
+      const mockGetJson = jest.spyOn(defaultHttpClient, 'getJson').mockRejectedValue(new Error('Network error'));
 
       await expect(ticker.info()).rejects.toThrow('Network error');
 
-      mockGetText.mockRestore();
+      mockGetJson.mockRestore();
     });
   });
 

@@ -1,4 +1,4 @@
-import { CurlClient, CurlResponse, CurlError } from 'curl-cffi';
+import { CurlClient, CurlResponse } from 'curl-cffi';
 import { logger } from './logger';
 
 export interface HttpClientConfig {
@@ -29,6 +29,8 @@ export class HttpClient {
   private config: Required<Omit<HttpClientConfig, 'proxy'>> & { proxy?: string | ProxyConfig };
   private cookieJar: any = null;
   private csrfToken: string | null = null;
+  private crumb: string | null = null;
+  private cookieStrategy: 'basic' | 'csrf' = 'basic';
 
   constructor(config: HttpClientConfig = {}) {
     this.config = {
@@ -37,7 +39,7 @@ export class HttpClient {
       retries: config.retries || 3,
       retryDelay: config.retryDelay || 1000,
       rateLimitDelay: config.rateLimitDelay || 100,
-      userAgent: config.userAgent || 'yfinance-ts/0.1.0',
+      userAgent: config.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       impersonate: config.impersonate || 'chrome124', // Default browser impersonation
       cookieJar: config.cookieJar !== false, // Enable by default
       cookieJarPath: config.cookieJarPath || './cookies.txt', // Default cookie jar path
@@ -50,27 +52,32 @@ export class HttpClient {
       impersonate: (this.config.impersonate as any), // chrome124
       headers: {
         'User-Agent': this.config.userAgent,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
         'DNT': '1',
         'Connection': 'keep-alive',
         'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0',
       },
     });
 
-    // Initialize cookie jar if enabled
+    // Initialize cookie jar if enabled (but don't load yet - lazy loading)
     if (this.config.cookieJar) {
-      this.initializeCookieJar();
+      this.cookieJar = {}; // Initialize empty cookie jar
     }
   }
 
-  private initializeCookieJar(): void {
-    // Load existing cookies if file exists
-    this.loadCookies();
-  }
-
   private async loadCookies(): Promise<void> {
+    // Only load once
+    if (this.cookieJar && Object.keys(this.cookieJar).length > 0) {
+      return; // Already loaded
+    }
+
     try {
       const fs = require('fs').promises;
       const path = require('path');
@@ -164,8 +171,11 @@ export class HttpClient {
     return output;
   }
 
-  private getCookiesForUrl(url: string): string[] {
+  private async getCookiesForUrl(url: string): Promise<string[]> {
     if (!this.cookieJar) return [];
+
+    // Ensure cookies are loaded
+    await this.loadCookies();
 
     try {
       const urlObj = new URL(url);
@@ -394,6 +404,14 @@ export class HttpClient {
 
     while (retries <= maxRetries) {
       try {
+        // For Yahoo Finance API requests, ensure we have fresh authentication (matching Python's approach)
+        if (this.isYahooFinanceApiRequest(fullUrl)) {
+          const authResult = await this._getCookieAndCrumb();
+          this.crumb = authResult.crumb;
+          this.cookieStrategy = authResult.strategy;
+          logger.debug(`Fresh authentication: crumb=${this.crumb}, strategy=${this.cookieStrategy}`);
+        }
+
         // Prepare request options
         const requestOptions: any = {
           method,
@@ -404,13 +422,22 @@ export class HttpClient {
 
         // Add cookies to request if cookie jar is enabled
         if (this.config.cookieJar && this.cookieJar) {
-          const cookies = this.getCookiesForUrl(fullUrl);
+          const cookies = await this.getCookiesForUrl(fullUrl);
           if (cookies.length > 0) {
             requestOptions.headers = {
               ...requestOptions.headers,
               'Cookie': cookies.join('; '),
             };
           }
+        }
+
+        // Add crumb to Yahoo Finance API requests
+        if (this.isYahooFinanceApiRequest(fullUrl) && this.crumb && this.crumb.length > 0) {
+          const urlObj = new URL(fullUrl);
+          const params = new URLSearchParams(urlObj.search);
+          params.set('crumb', this.crumb);
+          urlObj.search = params.toString();
+          requestOptions.url = urlObj.toString();
         }
 
         // Add proxy configuration if specified
@@ -446,7 +473,14 @@ export class HttpClient {
       } catch (error) {
         retries++;
 
-        if (retries <= maxRetries && this.shouldRetry(error as any)) {
+        // If this is a Yahoo Finance API request and we haven't exceeded retries,
+        // try clearing authentication and retrying
+        if (this.isYahooFinanceApiRequest(fullUrl) && retries <= maxRetries) {
+          logger.debug(`Yahoo Finance API request failed, clearing authentication and retrying (${retries}/${maxRetries})`);
+          this.clearCrumb();
+          this.clearCookies();
+          await this.delay(this.config.retryDelay * retries);
+        } else if (retries <= maxRetries && this.shouldRetry(error as any)) {
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
           logger.warn(`Request failed, retrying (${retries}/${maxRetries}): ${errorMessage}`);
           await this.delay(this.config.retryDelay * retries);
@@ -475,8 +509,10 @@ export class HttpClient {
   }
 
   // Cookie management methods
-  getCookies(domain?: string): any {
+  async getCookies(domain?: string): Promise<any> {
     if (!this.cookieJar) return {};
+
+    await this.loadCookies();
 
     if (domain) {
       return this.cookieJar[domain] || {};
@@ -526,6 +562,213 @@ export class HttpClient {
 
   clearCsrfToken(): void {
     this.csrfToken = null;
+  }
+
+  // Yahoo Finance crumb management
+  async getCrumb(): Promise<string> {
+    if (this.crumb) {
+      return this.crumb;
+    }
+
+    try {
+      logger.debug('Fetching Yahoo Finance crumb');
+      
+      const authResult = await this._getCookieAndCrumb();
+      this.crumb = authResult.crumb;
+      this.cookieStrategy = authResult.strategy;
+      
+      if (!this.crumb) {
+        logger.debug('No crumb obtained, continuing without authentication');
+        return '';
+      }
+      
+      logger.debug('Fetched crumb:', this.crumb, 'using strategy:', this.cookieStrategy);
+      return this.crumb;
+    } catch (error) {
+      logger.debug('Failed to fetch crumb, continuing without authentication:', error);
+      return '';
+    }
+  }
+
+  private async _getCrumbBasic(): Promise<string | null> {
+    try {
+      logger.debug('Visiting fc.yahoo.com to get cookies');
+      // First visit fc.yahoo.com to get cookies (matching Python implementation)
+      await this.getText('https://fc.yahoo.com');
+      
+      logger.debug('Getting crumb from query1.finance.yahoo.com');
+      // Then get crumb
+      const response = await this.getText('https://query1.finance.yahoo.com/v1/test/getcrumb');
+      logger.debug('Crumb response:', response);
+      
+      if (response.includes('Too Many Requests')) {
+        logger.debug('Rate limited by Yahoo Finance');
+        return null;
+      }
+      
+      return response.trim();
+    } catch (error) {
+      logger.debug('Basic crumb strategy error:', error);
+      return null;
+    }
+  }
+
+  private async _getCrumbCsrf(): Promise<string | null> {
+    try {
+      logger.debug('Visiting consent page');
+      // Visit consent page
+      const consentText = await this.getText('https://guce.yahoo.com/consent');
+      logger.debug('Consent page length:', consentText.length);
+      
+      // Parse CSRF token and sessionId from the consent page
+      const csrfMatch = consentText.match(/name="csrfToken"\s+value="([^"]+)"/);
+      const sessionMatch = consentText.match(/name="sessionId"\s+value="([^"]+)"/);
+      
+      logger.debug('CSRF match:', csrfMatch ? 'found' : 'not found');
+      logger.debug('Session match:', sessionMatch ? 'found' : 'not found');
+      
+      if (!csrfMatch || !sessionMatch) {
+        logger.debug('Consent page snippet:', consentText.substring(0, 500));
+        return null;
+      }
+      
+      const csrfToken = csrfMatch[1];
+      const sessionId = sessionMatch[1];
+      logger.debug('Extracted CSRF token and session ID');
+      
+      // Submit consent form
+      const consentData = {
+        agree: 'agree',
+        csrfToken: csrfToken,
+        sessionId: sessionId,
+        originalDoneUrl: 'https://finance.yahoo.com/',
+        namespace: 'yahoo',
+      };
+      
+      logger.debug('Submitting consent form');
+      await this.post(`https://consent.yahoo.com/v2/collectConsent?sessionId=${sessionId}`, consentData);
+      await this.get(`https://guce.yahoo.com/copyConsent?sessionId=${sessionId}`, { params: consentData });
+      
+      // Get crumb from query2
+      logger.debug('Getting crumb from query2');
+      const crumbResponse = await this.get('https://query2.finance.yahoo.com/v1/test/getcrumb');
+      const crumb = crumbResponse.dataRaw?.toString().trim();
+      logger.debug('CSRF crumb response:', crumb);
+      
+      if (crumb && crumb.includes('Too Many Requests')) {
+        logger.debug('Rate limited by Yahoo Finance');
+        return null;
+      }
+      
+      return crumb || null;
+    } catch (error) {
+      logger.debug('CSRF crumb strategy error:', error);
+      return null;
+    }
+  }
+
+  clearCrumb(): void {
+    this.crumb = null;
+  }
+
+  // Core authentication method matching Python's _get_cookie_and_crumb
+  private async _getCookieAndCrumb(): Promise<{crumb: string | null, strategy: 'basic' | 'csrf'}> {
+    let crumb: string | null = null;
+    let strategy: 'basic' | 'csrf' = this.cookieStrategy;
+
+    logger.debug(`Cookie strategy = '${this.cookieStrategy}'`);
+
+    try {
+      if (this.cookieStrategy === 'csrf') {
+        crumb = await this._getCrumbCsrf();
+        if (crumb === null) {
+          // Fail, switch to basic
+          logger.debug('CSRF strategy failed, switching to basic');
+          this._setCookieStrategy('basic');
+          crumb = await this._getCookieAndCrumbBasic();
+          strategy = 'basic';
+        }
+      } else {
+        // Try basic strategy first (fallback strategy)
+        crumb = await this._getCookieAndCrumbBasic();
+        if (crumb === null) {
+          // Fail, switch to CSRF
+          logger.debug('Basic strategy failed, switching to CSRF');
+          this._setCookieStrategy('csrf');
+          crumb = await this._getCrumbCsrf();
+          strategy = 'csrf';
+        }
+      }
+    } catch (error) {
+      logger.debug('Authentication failed:', error);
+      crumb = null;
+    }
+
+    return { crumb, strategy };
+  }
+
+  private async _getCookieAndCrumbBasic(): Promise<string | null> {
+    const cookieSuccess = await this._getCookieBasic();
+    if (!cookieSuccess) {
+      return null;
+    }
+    return await this._getCrumbBasic();
+  }
+
+  private async _getCookieBasic(): Promise<boolean> {
+    // Ensure cookies are loaded from file first
+    await this.loadCookies();
+
+    // Check if we already have a cookie
+    if (this.cookieJar && Object.keys(this.cookieJar).length > 0) {
+      logger.debug('Reusing existing cookies');
+      return true;
+    }
+
+    try {
+      // Visit fc.yahoo.com to get cookies
+      await this.getText('https://fc.yahoo.com');
+      await this._saveCookiesToFile();
+      return true;
+    } catch (error) {
+      logger.debug('_getCookieBasic failed:', error);
+      return false;
+    }
+  }
+
+  private _setCookieStrategy(strategy: 'basic' | 'csrf'): void {
+    if (strategy === this.cookieStrategy) {
+      return;
+    }
+
+    logger.debug(`Switching cookie strategy ${this.cookieStrategy} -> ${strategy}`);
+    this.cookieStrategy = strategy;
+    this.crumb = null;
+    this.clearCookies();
+  }
+
+  private async _saveCookiesToFile(): Promise<void> {
+    await this.saveCookies();
+  }
+
+  private isYahooFinanceApiRequest(url: string): boolean {
+    try {
+      const urlObj = new URL(url);
+      return urlObj.hostname.includes('yahoo.com') && 
+             (urlObj.pathname.includes('/v7/finance/') || 
+              urlObj.pathname.includes('/v10/finance/') ||
+              urlObj.pathname.includes('/v1/finance/') ||
+              urlObj.pathname.includes('/ws/fundamentals/'));
+    } catch {
+      return false;
+    }
+  }
+
+  private async ensureAuthentication(): Promise<void> {
+    // Try to get authentication, but don't fail if we can't
+    if (!this.crumb) {
+      await this.getCrumb();
+    }
   }
 }
 
